@@ -1,6 +1,7 @@
 import React, { useState, useRef } from 'react';
 import {
   BoardThemeId,
+  PieceSetId,
   BoardSquarePiece,
   parseFenToBoard,
   coordsToSquare,
@@ -20,6 +21,12 @@ export interface BoardThemeSpec {
   selectedBg: string;
   dotColorRgb: string;
   coordColor: string;
+}
+
+export interface PieceSetSpec {
+  id: PieceSetId;
+  labelRu: string;
+  subtitleRu: string;
 }
 
 export const BOARD_THEMES: Record<BoardThemeId, BoardThemeSpec> = {
@@ -53,12 +60,144 @@ export const BOARD_THEMES: Record<BoardThemeId, BoardThemeSpec> = {
     dotColorRgb: '24, 24, 27',
     coordColor: '#FDE68A',
   },
+  emerald_tournament: {
+    id: 'emerald_tournament',
+    labelRu: 'Emerald Tournament',
+    lightSquare: '#DCE7E1',
+    darkSquare: '#166534',
+    lastMoveBg: 'rgba(250, 204, 21, 0.40)',
+    selectedBg: 'rgba(217, 119, 6, 0.45)',
+    dotColorRgb: '16, 185, 129',
+    coordColor: '#BBF7D0',
+  },
+  cyber_indigo: {
+    id: 'cyber_indigo',
+    labelRu: 'Cyber Indigo',
+    lightSquare: '#475569',
+    darkSquare: '#1E1B4B',
+    lastMoveBg: 'rgba(56, 189, 248, 0.34)',
+    selectedBg: 'rgba(217, 119, 6, 0.45)',
+    dotColorRgb: '56, 189, 248',
+    coordColor: '#C7D2FE',
+  },
+  amber_walnut: {
+    id: 'amber_walnut',
+    labelRu: 'Amber Walnut',
+    lightSquare: '#E7CBA9',
+    darkSquare: '#5C3A21',
+    lastMoveBg: 'rgba(245, 158, 11, 0.42)',
+    selectedBg: 'rgba(16, 185, 129, 0.44)',
+    dotColorRgb: '217, 119, 6',
+    coordColor: '#FDE68A',
+  },
 };
 
-function ChessPieceSvg({ piece }: { piece: BoardSquarePiece }) {
+export const PIECE_SETS: Record<PieceSetId, PieceSetSpec> = {
+  neo_staunton: {
+    id: 'neo_staunton',
+    labelRu: 'Neo-Staunton Pro',
+    subtitleRu: 'Турнирный стандарт Lichess',
+  },
+  alpha_minimal: {
+    id: 'alpha_minimal',
+    labelRu: 'Alpha Minimalist',
+    subtitleRu: 'Чистая геометрия без засечек',
+  },
+  imperial_crown: {
+    id: 'imperial_crown',
+    labelRu: 'Imperial Crown',
+    subtitleRu: 'Классика с золотым акцентом',
+  },
+  oled_neon_edge: {
+    id: 'oled_neon_edge',
+    labelRu: 'OLED Contrast Edge',
+    subtitleRu: 'Контурный стиль для #121212',
+  },
+};
+
+function ChessPieceSvg({
+  piece,
+  pieceSetId = 'neo_staunton',
+}: {
+  piece: BoardSquarePiece;
+  pieceSetId?: PieceSetId;
+}) {
   const isWhite = piece.color === 'w';
-  const fill = isWhite ? '#F8FAFC' : '#272B33';
-  const stroke = isWhite ? '#18181B' : '#F1F5F9';
+
+  if (pieceSetId === 'alpha_minimal') {
+    const fill = isWhite ? '#F8FAFC' : '#1E293B';
+    const stroke = isWhite ? '#0F172A' : '#94A3B8';
+    const badgeColor = isWhite ? '#0F172A' : '#F8FAFC';
+
+    return (
+      <svg viewBox="0 0 45 45" className="w-4/5 h-4/5 select-none pointer-events-none">
+        {piece.type === 'p' && (
+          <g fill={fill} stroke={stroke} strokeWidth="2.4">
+            <circle cx="22.5" cy="14" r="6" />
+            <path d="M14,35 L31,35 L27.5,22 L17.5,22 Z" strokeLinejoin="round" />
+          </g>
+        )}
+        {piece.type === 'r' && (
+          <g fill={fill} stroke={stroke} strokeWidth="2.4" strokeLinejoin="round">
+            <rect x="13" y="13" width="19" height="22" rx="2" />
+            <path d="M11,13 L34,13 M11,36 L34,36" strokeWidth="3" />
+          </g>
+        )}
+        {piece.type === 'n' && (
+          <g fill={fill} stroke={stroke} strokeWidth="2.4" strokeLinejoin="round">
+            <polygon points="13,36 33,36 30,14 20,10 12,21 19,22" />
+            <circle cx="21" cy="16" r="1.8" fill={badgeColor} stroke="none" />
+          </g>
+        )}
+        {piece.type === 'b' && (
+          <g fill={fill} stroke={stroke} strokeWidth="2.4" strokeLinejoin="round">
+            <polygon points="22.5,9 32,26 28,36 17,36 13,26" />
+            <line x1="19" y1="19" x2="26" y2="19" stroke={badgeColor} strokeWidth="2.2" />
+          </g>
+        )}
+        {piece.type === 'q' && (
+          <g fill={fill} stroke={stroke} strokeWidth="2.4" strokeLinejoin="round">
+            <polygon points="12,35 33,35 36,15 27,23 22.5,12 18,23 9,15" />
+          </g>
+        )}
+        {piece.type === 'k' && (
+          <g fill={fill} stroke={stroke} strokeWidth="2.4" strokeLinejoin="round">
+            <path d="M22.5,7 L22.5,14 M19,10.5 L26,10.5" strokeWidth="2.8" />
+            <polygon points="13,36 32,36 34,17 22.5,14 11,17" />
+          </g>
+        )}
+      </svg>
+    );
+  }
+
+  // Color styling for Neo-Staunton, Imperial Crown, and OLED Contrast Edge
+  const fill =
+    pieceSetId === 'oled_neon_edge'
+      ? isWhite
+        ? '#18181B'
+        : '#09090B'
+      : pieceSetId === 'imperial_crown'
+        ? isWhite
+          ? '#FEF3C7'
+          : '#27272A'
+        : isWhite
+          ? '#F8FAFC'
+          : '#272B33';
+
+  const stroke =
+    pieceSetId === 'oled_neon_edge'
+      ? isWhite
+        ? '#10B981'
+        : '#D97706'
+      : pieceSetId === 'imperial_crown'
+        ? isWhite
+          ? '#92400E'
+          : '#FBBF24'
+        : isWhite
+          ? '#18181B'
+          : '#F1F5F9';
+
+  const strokeWidth = pieceSetId === 'oled_neon_edge' ? '2.5' : '2.2';
 
   switch (piece.type) {
     case 'p':
@@ -68,7 +207,7 @@ function ChessPieceSvg({ piece }: { piece: BoardSquarePiece }) {
             d="M 22.5,9 C 19.5,9 17,11.5 17,14.5 C 17,16.8 18.4,18.7 20.4,19.5 C 17.5,21 15.5,24 15.5,28 L 29.5,28 C 29.5,24 27.5,21 24.6,19.5 C 26.6,18.7 28,16.8 28,14.5 C 28,11.5 25.5,9 22.5,9 z M 12.5,32 L 32.5,32 L 34,36.5 L 11,36.5 L 12.5,32 z"
             fill={fill}
             stroke={stroke}
-            strokeWidth="2.2"
+            strokeWidth={strokeWidth}
             strokeLinecap="round"
           />
         </svg>
@@ -76,7 +215,7 @@ function ChessPieceSvg({ piece }: { piece: BoardSquarePiece }) {
     case 'r':
       return (
         <svg viewBox="0 0 45 45" className="w-4/5 h-4/5 drop-shadow-sm select-none pointer-events-none">
-          <g fill={fill} stroke={stroke} strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+          <g fill={fill} stroke={stroke} strokeWidth={strokeWidth} strokeLinecap="round" strokeLinejoin="round">
             <path d="M 9,39 L 36,39 L 36,36 L 9,36 L 9,39 z M 12,36 L 12,32 L 33,32 L 33,36 L 12,36 z M 14,29.5 L 14,16.5 L 31,16.5 L 31,29.5 L 14,29.5 z M 11,14 L 11,9 L 15,9 L 15,11 L 20,11 L 20,9 L 25,9 L 25,11 L 30,11 L 30,9 L 34,9 L 34,14" />
           </g>
         </svg>
@@ -84,7 +223,7 @@ function ChessPieceSvg({ piece }: { piece: BoardSquarePiece }) {
     case 'n':
       return (
         <svg viewBox="0 0 45 45" className="w-4/5 h-4/5 drop-shadow-sm select-none pointer-events-none">
-          <g fill={fill} stroke={stroke} strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+          <g fill={fill} stroke={stroke} strokeWidth={strokeWidth} strokeLinecap="round" strokeLinejoin="round">
             <path d="M 22,10 C 32.5,11 38.5,18 38,39 L 15,39 C 15,30 25,32.5 23,18" />
             <path d="M 24,18 C 24.38,20.91 18.45,25.37 16,27 C 13,29 13.18,31.34 11,31 C 9.958,30.06 12.41,27.96 11,28 C 10,28 11.19,29.23 10,30 C 9,30 5.997,31 6,26 C 6,24 12,14 12,14 C 12,14 13.89,12.1 14,10.5 C 13.27,9.506 13.5,8.5 13.5,7.5 C 14.5,6.5 16.5,10 16.5,10 L 18.5,10 C 18.5,10 19.28,8.008 21,7 C 22,7 22,10 22,10" />
           </g>
@@ -93,7 +232,7 @@ function ChessPieceSvg({ piece }: { piece: BoardSquarePiece }) {
     case 'b':
       return (
         <svg viewBox="0 0 45 45" className="w-4/5 h-4/5 drop-shadow-sm select-none pointer-events-none">
-          <g fill={fill} stroke={stroke} strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+          <g fill={fill} stroke={stroke} strokeWidth={strokeWidth} strokeLinecap="round" strokeLinejoin="round">
             <path d="M 9,36 C 12.39,35.03 19.11,36.43 22.5,34 C 25.89,36.43 32.61,35.03 36,36 C 36,36 37.65,36.54 39,38 C 38.32,38.97 37.35,38.99 36,38.5 C 32.61,37.53 25.89,38.96 22.5,37.5 C 19.11,38.96 12.39,37.53 9,38.5 C 7.646,38.99 6.677,38.97 6,38 C 7.354,36.06 9,36 9,36 z" />
             <path d="M 15,32 C 17.5,34.5 27.5,34.5 30,32 C 30.5,30.5 30,30 30,30 C 30,27.5 27.5,26 27.5,26 C 33,24.5 33.5,14.5 22.5,10.5 C 11.5,14.5 12,24.5 17.5,26 C 17.5,26 15,27.5 15,30 C 15,30 14.5,30.5 15,32 z" />
             <circle cx="22.5" cy="8" r="2.2" />
@@ -103,7 +242,7 @@ function ChessPieceSvg({ piece }: { piece: BoardSquarePiece }) {
     case 'q':
       return (
         <svg viewBox="0 0 45 45" className="w-4/5 h-4/5 drop-shadow-sm select-none pointer-events-none">
-          <g fill={fill} stroke={stroke} strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+          <g fill={fill} stroke={stroke} strokeWidth={strokeWidth} strokeLinecap="round" strokeLinejoin="round">
             <path d="M 9,26 C 17.5,24.5 30,24.5 36,26 L 38.5,13.5 L 31,25 L 30.7,10.9 L 25.5,24.5 L 22.5,10 L 19.5,24.5 L 14.3,10.9 L 14,25 L 6.5,13.5 L 9,26 z" />
             <path d="M 9,26 C 9,28 10.5,28 11.5,30 C 12.5,31.5 12.5,31 12,33.5 C 10.5,34.5 11,36 11,36 C 9.5,37.5 11,38.5 11,38.5 C 17.5,39.5 27.5,39.5 34,38.5 C 34,38.5 35.5,37.5 34,36 C 34,36 34.5,34.5 33,33.5 C 32.5,31 32.5,31.5 33.5,30 C 34.5,28 36,28 36,26 C 27.5,24.5 17.5,24.5 9,26 z" />
           </g>
@@ -112,7 +251,7 @@ function ChessPieceSvg({ piece }: { piece: BoardSquarePiece }) {
     case 'k':
       return (
         <svg viewBox="0 0 45 45" className="w-4/5 h-4/5 drop-shadow-sm select-none pointer-events-none">
-          <g fill={fill} stroke={stroke} strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+          <g fill={fill} stroke={stroke} strokeWidth={strokeWidth} strokeLinecap="round" strokeLinejoin="round">
             <path d="M 22.5,11.63 L 22.5,6" />
             <path d="M 20,8 L 25,8" />
             <path d="M 22.5,25 C 22.5,25 27,17.5 25.5,14.5 C 25.5,14.5 24.5,12 22.5,12 C 20.5,12 19.5,14.5 19.5,14.5 C 18,17.5 22.5,25 22.5,25" />
@@ -135,7 +274,7 @@ export function SmoothedEvalBarWidget({
   const whitePct = computeEvalBarPercentage({ cp: evalCp, mate });
   const effectiveWhitePct = flipped ? 100 - whitePct : whitePct;
   const badgeText = formatEvalBadge({ cp: evalCp, mate });
-  const isWhiteAdvantage = (mate !== undefined ? mate > 0 : evalCp >= 0);
+  const isWhiteAdvantage = mate !== undefined ? mate > 0 : evalCp >= 0;
 
   return (
     <div
@@ -215,6 +354,7 @@ export function AdaptiveChessClockWidget({
 interface InteractiveChessboardProps {
   fen: string;
   themeId: BoardThemeId;
+  pieceSetId?: PieceSetId;
   legalDotOpacity: number;
   lastMoveFrom?: string;
   lastMoveTo?: string;
@@ -227,6 +367,7 @@ interface InteractiveChessboardProps {
 export function InteractiveChessboard({
   fen,
   themeId,
+  pieceSetId = 'neo_staunton',
   legalDotOpacity,
   lastMoveFrom,
   lastMoveTo,
@@ -238,7 +379,7 @@ export function InteractiveChessboard({
   const [selectedSquare, setSelectedSquare] = useState<string | null>(null);
   const pointerStartRef = useRef<{ x: number; y: number } | null>(null);
 
-  const theme = BOARD_THEMES[themeId];
+  const theme = BOARD_THEMES[themeId] || BOARD_THEMES.oled_minimalist;
   const board = parseFenToBoard(fen);
   const legalTargets = selectedSquare ? getPseudoLegalTargets(fen, selectedSquare) : [];
 
@@ -311,7 +452,6 @@ export function InteractiveChessboard({
                 style={{ backgroundColor: baseBg }}
                 className="relative flex items-center justify-center w-full h-full focus:outline-none focus-visible:ring-2 focus-visible:ring-[#D97706] transition-colors duration-200"
               >
-                {/* Soft last-move highlight */}
                 {isLastMove && (
                   <span
                     className="absolute inset-0 transition-opacity duration-300 pointer-events-none"
@@ -319,7 +459,6 @@ export function InteractiveChessboard({
                   />
                 )}
 
-                {/* Selected square highlight */}
                 {isSelected && (
                   <span
                     className="absolute inset-0 pointer-events-none"
@@ -327,7 +466,6 @@ export function InteractiveChessboard({
                   />
                 )}
 
-                {/* Rank coordinate on left file */}
                 {cIdx === 0 && (
                   <span
                     style={{ color: theme.coordColor }}
@@ -337,7 +475,6 @@ export function InteractiveChessboard({
                   </span>
                 )}
 
-                {/* File coordinate on bottom rank */}
                 {rIdx === 7 && (
                   <span
                     style={{ color: theme.coordColor }}
@@ -347,14 +484,12 @@ export function InteractiveChessboard({
                   </span>
                 )}
 
-                {/* Chess Piece */}
                 {piece && (
                   <span className="relative z-10 w-full h-full flex items-center justify-center transition-transform duration-150 active:scale-105">
-                    <ChessPieceSvg piece={piece} />
+                    <ChessPieceSvg piece={piece} pieceSetId={pieceSetId} />
                   </span>
                 )}
 
-                {/* Legal move dot / capture ring with configurable opacity */}
                 {isLegalTarget && (
                   <span
                     className="absolute z-20 pointer-events-none flex items-center justify-center inset-0"

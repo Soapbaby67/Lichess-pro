@@ -1,5 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import {
+  BoardThemeId,
+  PieceSetId,
   PersonalPuzzleDto,
   PERSONAL_MISTAKE_PUZZLES,
   applyUciMoveToFen,
@@ -9,40 +11,49 @@ import { triggerFlutterHaptic, HapticEventLog } from '../utils/haptics';
 
 interface PuzzleTrainerViewProps {
   initialPuzzle?: PersonalPuzzleDto | null;
+  puzzlesList?: PersonalPuzzleDto[];
+  boardTheme?: BoardThemeId;
+  pieceSet?: PieceSetId;
   onLogHaptic: (entry: HapticEventLog) => void;
 }
 
 export function PuzzleTrainerView({
   initialPuzzle,
+  puzzlesList,
+  boardTheme = 'oled_minimalist',
+  pieceSet = 'neo_staunton',
   onLogHaptic,
 }: PuzzleTrainerViewProps) {
+  const effectivePuzzles =
+    puzzlesList && puzzlesList.length > 0 ? puzzlesList : PERSONAL_MISTAKE_PUZZLES;
+
   const [currentIdx, setCurrentIdx] = useState<number>(() => {
     if (!initialPuzzle) return 0;
-    const found = PERSONAL_MISTAKE_PUZZLES.findIndex((p) => p.id === initialPuzzle.id);
+    const found = effectivePuzzles.findIndex((p) => p.id === initialPuzzle.id);
     return found >= 0 ? found : 0;
   });
 
   const [autoNext15s, setAutoNext15s] = useState<boolean>(true);
   const [status, setStatus] = useState<'idle' | 'solved' | 'failed'>('idle');
   const [boardFen, setBoardFen] = useState<string>(
-    PERSONAL_MISTAKE_PUZZLES[0].initialFen
+    effectivePuzzles[0].initialFen
   );
   const [solvedCount, setSolvedCount] = useState<number>(14);
   const [countdownMs, setCountdownMs] = useState<number | null>(null);
 
-  const puzzle = PERSONAL_MISTAKE_PUZZLES[currentIdx] || PERSONAL_MISTAKE_PUZZLES[0];
+  const puzzle = effectivePuzzles[currentIdx] || effectivePuzzles[0];
 
   useEffect(() => {
     if (initialPuzzle) {
-      const idx = PERSONAL_MISTAKE_PUZZLES.findIndex((p) => p.id === initialPuzzle.id);
+      const idx = effectivePuzzles.findIndex((p) => p.id === initialPuzzle.id);
       if (idx >= 0) {
         setCurrentIdx(idx);
-        setBoardFen(PERSONAL_MISTAKE_PUZZLES[idx].initialFen);
+        setBoardFen(effectivePuzzles[idx].initialFen);
         setStatus('idle');
         setCountdownMs(null);
       }
     }
-  }, [initialPuzzle]);
+  }, [initialPuzzle, effectivePuzzles]);
 
   useEffect(() => {
     if (status !== 'solved' || !autoNext15s) {
@@ -63,9 +74,9 @@ export function PuzzleTrainerView({
     }, 150);
 
     const timer = setTimeout(() => {
-      const nextIdx = (currentIdx + 1) % PERSONAL_MISTAKE_PUZZLES.length;
+      const nextIdx = (currentIdx + 1) % effectivePuzzles.length;
       setCurrentIdx(nextIdx);
-      setBoardFen(PERSONAL_MISTAKE_PUZZLES[nextIdx].initialFen);
+      setBoardFen(effectivePuzzles[nextIdx].initialFen);
       setStatus('idle');
       setCountdownMs(null);
       triggerFlutterHaptic(
@@ -79,10 +90,10 @@ export function PuzzleTrainerView({
       clearInterval(interval);
       clearTimeout(timer);
     };
-  }, [status, autoNext15s, currentIdx, onLogHaptic]);
+  }, [status, autoNext15s, currentIdx, effectivePuzzles, onLogHaptic]);
 
   const selectPuzzleByIndex = (idx: number) => {
-    const target = PERSONAL_MISTAKE_PUZZLES[idx];
+    const target = effectivePuzzles[idx];
     if (!target) return;
     setCurrentIdx(idx);
     setBoardFen(target.initialFen);
@@ -179,7 +190,8 @@ export function PuzzleTrainerView({
 
           <InteractiveChessboard
             fen={boardFen}
-            themeId="oled_minimalist"
+            themeId={boardTheme}
+            pieceSetId={pieceSet}
             legalDotOpacity={0.65}
             lastMoveFrom={puzzle.fromSquare}
             lastMoveTo={status === 'solved' ? puzzle.toSquare : undefined}
@@ -279,10 +291,10 @@ export function PuzzleTrainerView({
           {/* List of Generated Personal Mistake Puzzles */}
           <section className="rounded-xl bg-[#1E1E1E] border border-[#2A2A2E] p-5">
             <h3 className="text-sm font-semibold text-[#F3F4F6] mb-3">
-              Очередь задач из ваших реальных партий ({PERSONAL_MISTAKE_PUZZLES.length})
+              Очередь задач из ваших реальных партий ({effectivePuzzles.length})
             </h3>
             <div className="space-y-2">
-              {PERSONAL_MISTAKE_PUZZLES.map((item, idx) => {
+              {effectivePuzzles.map((item, idx) => {
                 const isCurrent = idx === currentIdx;
                 return (
                   <button

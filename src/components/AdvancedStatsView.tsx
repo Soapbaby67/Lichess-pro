@@ -5,6 +5,7 @@ import {
   RepertoireColorFilter,
   OpeningStatDto,
   PersonalPuzzleDto,
+  RealPlayedGameSummaryDto,
   STREAK_BY_PERF,
   RATING_SERIES_BY_TIMEFRAME,
   OPENING_REPERTOIRE_DATA,
@@ -12,20 +13,35 @@ import {
   STAGE_ACCURACY_SUMMARY,
   TACTICAL_MISTAKE_PATTERNS,
   PERSONAL_MISTAKE_PUZZLES,
+  DEFAULT_TERMINATION_BREAKDOWN,
+  DEFAULT_COLOR_PERFORMANCE,
+  DEFAULT_RECENT_GAMES,
   computeWinDrawLossPercentages,
   detectOpeningBlindSpots,
   classifyMoveTimeAnomaly,
 } from '../logic/chessAnalytics';
+import {
+  RealLichessAnalyticsBundle,
+  LichessAccountProfile,
+} from '../logic/lichessApiClient';
 import { triggerFlutterHaptic, HapticEventLog } from '../utils/haptics';
 
 interface AdvancedStatsViewProps {
+  realAnalytics?: RealLichessAnalyticsBundle | null;
+  accountProfile?: LichessAccountProfile | null;
+  onOpenAccountModal: () => void;
   onInspectOpeningOnBoard: (opening: OpeningStatDto) => void;
+  onInspectRealGameOnBoard: (game: RealPlayedGameSummaryDto) => void;
   onStartPersonalPuzzle: (puzzle: PersonalPuzzleDto) => void;
   onLogHaptic: (entry: HapticEventLog) => void;
 }
 
 export function AdvancedStatsView({
+  realAnalytics,
+  accountProfile,
+  onOpenAccountModal,
   onInspectOpeningOnBoard,
+  onInspectRealGameOnBoard,
   onStartPersonalPuzzle,
   onLogHaptic,
 }: AdvancedStatsViewProps) {
@@ -36,17 +52,35 @@ export function AdvancedStatsView({
   const [ecoSearch, setEcoSearch] = useState<string>('');
   const [selectedPointIdx, setSelectedPointIdx] = useState<number>(6);
 
-  const streakForm = STREAK_BY_PERF[perf];
-  const ratingSeries = RATING_SERIES_BY_TIMEFRAME[timeframe];
+  const streakForm = realAnalytics ? realAnalytics.streakAndForm : STREAK_BY_PERF[perf];
+  const ratingSeries =
+    realAnalytics && realAnalytics.ratingPoints.length > 0
+      ? realAnalytics.ratingPoints
+      : RATING_SERIES_BY_TIMEFRAME[timeframe];
+  const openingData = realAnalytics?.openings ?? OPENING_REPERTOIRE_DATA;
+  const timeBuckets = realAnalytics?.timeBuckets ?? TIME_HEATMAP_BUCKETS;
+  const stageSummary = realAnalytics?.stageAccuracy ?? STAGE_ACCURACY_SUMMARY;
+  const mistakePatterns = TACTICAL_MISTAKE_PATTERNS;
+  const personalPuzzles =
+    realAnalytics?.generatedPuzzles ?? PERSONAL_MISTAKE_PUZZLES;
+  const terminationData =
+    realAnalytics?.terminationBreakdown ?? DEFAULT_TERMINATION_BREAKDOWN;
+  const colorPerf =
+    realAnalytics?.colorPerformance ?? DEFAULT_COLOR_PERFORMANCE;
+  const recentGames =
+    realAnalytics && realAnalytics.recentGames.length > 0
+      ? realAnalytics.recentGames
+      : DEFAULT_RECENT_GAMES;
+
   const activeRatingPoint =
     ratingSeries[Math.min(selectedPointIdx, ratingSeries.length - 1)] || ratingSeries[0];
 
   const blindSpotIds = useMemo(() => {
-    return new Set(detectOpeningBlindSpots(OPENING_REPERTOIRE_DATA).map((o) => o.id));
-  }, []);
+    return new Set(detectOpeningBlindSpots(openingData).map((o) => o.id));
+  }, [openingData]);
 
   const filteredOpenings = useMemo(() => {
-    return OPENING_REPERTOIRE_DATA.filter((item) => {
+    return openingData.filter((item) => {
       if (colorFilter !== 'all' && item.side !== colorFilter) return false;
       if (onlyBlindSpots && !blindSpotIds.has(item.id)) return false;
       if (ecoSearch.trim().length > 0) {
@@ -59,7 +93,7 @@ export function AdvancedStatsView({
       }
       return true;
     });
-  }, [colorFilter, onlyBlindSpots, ecoSearch, blindSpotIds]);
+  }, [openingData, colorFilter, onlyBlindSpots, ecoSearch, blindSpotIds]);
 
   const minRating = Math.min(...ratingSeries.map((d) => d.rating)) - 15;
   const maxRating = Math.max(...ratingSeries.map((d) => d.rating)) + 15;
@@ -84,6 +118,21 @@ export function AdvancedStatsView({
         ? { label: 'СТАБИЛЬНОСТЬ', color: 'text-[#D97706]' }
         : { label: 'СПАД', color: 'text-[#EF4444]' };
 
+  const whiteSideSummary = {
+    label: 'За Белых ♔',
+    wins: colorPerf.whiteWins,
+    draws: colorPerf.whiteDraws,
+    losses: colorPerf.whiteLosses,
+    avgAccuracyPct: colorPerf.whiteAvgAccuracy,
+  };
+  const blackSideSummary = {
+    label: 'За Черных ♚',
+    wins: colorPerf.blackWins,
+    draws: colorPerf.blackDraws,
+    losses: colorPerf.blackLosses,
+    avgAccuracyPct: colorPerf.blackAvgAccuracy,
+  };
+
   return (
     <div className="space-y-6">
       {/* Top Toolbar: Perf Selector & Summary Header */}
@@ -93,44 +142,79 @@ export function AdvancedStatsView({
             01. Продвинутая статистика и аналитика партий
           </h1>
           <p className="text-sm text-[#9CA3AF] mt-1">
-            Локальная база партий Isar + Lichess API · Модуль <code className="font-mono text-xs text-[#D97706]">lib/src/view/stats/advanced_stats_screen.dart</code>
+            {realAnalytics ? (
+              <>
+                Аккаунт Lichess:{' '}
+                <strong className="text-[#10B981] font-mono">
+                  {realAnalytics.username}
+                </strong>{' '}
+                · Проанализировано реальных партий:{' '}
+                <strong className="text-[#F3F4F6] font-mono tabular-nums">
+                  {realAnalytics.totalAnalyzedGames}
+                </strong>{' '}
+                · Прямая синхронизация с <code className="font-mono text-xs text-[#D97706]">lichess.org/api</code>
+              </>
+            ) : (
+              <>
+                Локальная база партий Isar + Lichess API · Модуль{' '}
+                <code className="font-mono text-xs text-[#D97706]">
+                  lib/src/view/stats/advanced_stats_screen.dart
+                </code>
+              </>
+            )}
           </p>
         </div>
 
-        {/* Interactive Perf Filter Control */}
-        <div
-          role="group"
-          aria-label="Выбор контроля времени"
-          className="flex items-center gap-1 p-1 rounded-lg bg-[#1E1E1E] border border-[#2C2C30] self-start"
-        >
-          {(
-            [
-              { id: 'bullet', label: 'Bullet' },
-              { id: 'blitz', label: 'Blitz 3+0' },
-              { id: 'rapid', label: 'Rapid 10+0' },
-              { id: 'classical', label: 'Classical' },
-            ] as const
-          ).map((item) => (
-            <button
-              key={item.id}
-              type="button"
-              onClick={() => {
-                triggerFlutterHaptic(
-                  'HapticFeedback.selectionClick()',
-                  `Переключение дисциплины: ${item.label}`,
-                  onLogHaptic
-                );
-                setPerf(item.id);
-              }}
-              className={`px-3 py-1.5 text-xs font-semibold rounded-md transition-colors whitespace-nowrap shrink-0 ${
-                perf === item.id
-                  ? 'bg-[#D97706] text-[#121212]'
-                  : 'text-[#9CA3AF] hover:text-[#F3F4F6]'
-              }`}
-            >
-              {item.label}
-            </button>
-          ))}
+        <div className="flex flex-wrap items-center gap-2 self-start">
+          <button
+            type="button"
+            onClick={onOpenAccountModal}
+            className={`px-3.5 py-1.5 rounded-lg text-xs font-bold transition-colors border whitespace-nowrap shrink-0 ${
+              realAnalytics
+                ? 'bg-[#10B981]/15 border-[#10B981] text-[#10B981] hover:bg-[#10B981]/25'
+                : 'bg-[#1E1E1E] border-[#D97706] text-[#F59E0B] hover:bg-[#27272A]'
+            }`}
+          >
+            {realAnalytics
+              ? `✓ Аккаунт: ${realAnalytics.username} (${realAnalytics.totalAnalyzedGames} парт.)`
+              : 'Подключить аккаунт Lichess (API токен)'}
+          </button>
+
+          {/* Interactive Perf Filter Control */}
+          <div
+            role="group"
+            aria-label="Выбор контроля времени"
+            className="flex items-center gap-1 p-1 rounded-lg bg-[#1E1E1E] border border-[#2C2C30]"
+          >
+            {(
+              [
+                { id: 'bullet', label: 'Bullet' },
+                { id: 'blitz', label: 'Blitz 3+0' },
+                { id: 'rapid', label: 'Rapid 10+0' },
+                { id: 'classical', label: 'Classical' },
+              ] as const
+            ).map((item) => (
+              <button
+                key={item.id}
+                type="button"
+                onClick={() => {
+                  triggerFlutterHaptic(
+                    'HapticFeedback.selectionClick()',
+                    `Переключение дисциплины: ${item.label}`,
+                    onLogHaptic
+                  );
+                  setPerf(item.id);
+                }}
+                className={`px-3 py-1.5 text-xs font-semibold rounded-md transition-colors whitespace-nowrap shrink-0 ${
+                  perf === item.id
+                    ? 'bg-[#D97706] text-[#121212]'
+                    : 'text-[#9CA3AF] hover:text-[#F3F4F6]'
+                }`}
+              >
+                {item.label}
+              </button>
+            ))}
+          </div>
         </div>
       </div>
 
@@ -182,7 +266,11 @@ export function AdvancedStatsView({
           </div>
 
           <div className="mt-6 pt-4 border-t border-[#2A2A2E] flex items-center justify-between text-xs text-[#9CA3AF]">
-            <span>Расчет точности: Stockfish 16.1 NNUE</span>
+            <span>
+              {accountProfile
+                ? `Рейтинг Lichess (${perf}): ${accountProfile.perfs[perf]?.rating ?? '—'}`
+                : 'Расчет точности: Stockfish 16.1 NNUE'}
+            </span>
             <span className="font-mono tabular-nums text-[#F3F4F6]">
               ACPL: 21.4 · Зевков: 0.4/партию
             </span>
@@ -292,7 +380,7 @@ export function AdvancedStatsView({
                 const isSelected = idx === Math.min(selectedPointIdx, chartPoints.length - 1);
                 return (
                   <g
-                    key={pt.label}
+                    key={`${pt.label}-${idx}`}
                     className="cursor-pointer"
                     onClick={() => {
                       triggerFlutterHaptic(
@@ -325,6 +413,168 @@ export function AdvancedStatsView({
                 );
               })}
             </svg>
+          </div>
+        </section>
+      </div>
+
+      {/* NEW ROW: Expanded Account Breakdown (Color Performance + Termination Reasons + Recent Real Games) */}
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-stretch">
+        {/* Color Comparison & Termination Reasons */}
+        <section className="lg:col-span-6 rounded-xl bg-[#1E1E1E] border border-[#2A2A2E] p-5 flex flex-col justify-between space-y-4">
+          <div>
+            <h2 className="text-base font-semibold text-[#F3F4F6]">
+              Увеличенная статистика: Эффективность по цвету и исходам
+            </h2>
+            <p className="text-xs text-[#9CA3AF] mt-0.5">
+              Детализация побед/поражений за белых и черных, средний рейтинг соперников и причины завершения партий
+            </p>
+
+            {/* White vs Black Cards */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mt-4">
+              {[whiteSideSummary, blackSideSummary].map((sideItem) => {
+                const wdl = computeWinDrawLossPercentages(
+                  sideItem.wins,
+                  sideItem.draws,
+                  sideItem.losses
+                );
+                return (
+                  <div
+                    key={sideItem.label}
+                    className="rounded-lg bg-[#121212] border border-[#2A2A2E] p-3.5 space-y-2"
+                  >
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-bold text-[#F3F4F6]">{sideItem.label}</span>
+                      <span className="text-xs font-mono text-[#10B981] font-semibold tabular-nums">
+                        {wdl.winPct}% Побед ({wdl.totalGames} парт.)
+                      </span>
+                    </div>
+                    <div className="h-2 rounded overflow-hidden flex bg-[#1E1E1E]">
+                      <div style={{ width: `${wdl.winPct}%` }} className="bg-[#10B981]" />
+                      <div style={{ width: `${wdl.drawPct}%` }} className="bg-[#6B7280]" />
+                      <div style={{ width: `${wdl.lossPct}%` }} className="bg-[#EF4444]" />
+                    </div>
+                    <div className="flex items-center justify-between text-[11px] font-mono text-[#9CA3AF] tabular-nums">
+                      <span>Точность: <strong className="text-[#F3F4F6]">{sideItem.avgAccuracyPct}%</strong></span>
+                      <span>Ср. соп.: <strong className="text-[#F3F4F6]">{colorPerf.avgOpponentRating}</strong></span>
+                      <span>Пик: <strong className="text-[#D97706]">{colorPerf.peakRating}</strong></span>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* Termination Breakdown */}
+          <div className="pt-3 border-t border-[#2A2A2E] grid grid-cols-2 sm:grid-cols-4 gap-2.5 text-xs font-mono tabular-nums">
+            <div className="p-2.5 rounded-lg bg-[#121212] border border-[#262629]">
+              <div className="text-[10px] text-[#9CA3AF] uppercase">Победа матом</div>
+              <div className="text-sm font-bold text-[#10B981] mt-0.5">
+                {terminationData.mateWins}
+              </div>
+              <div className="text-[10px] text-[#EF4444]">
+                Пораж.: {terminationData.mateLosses}
+              </div>
+            </div>
+            <div className="p-2.5 rounded-lg bg-[#121212] border border-[#262629]">
+              <div className="text-[10px] text-[#9CA3AF] uppercase">Сдача соп.</div>
+              <div className="text-sm font-bold text-[#10B981] mt-0.5">
+                {terminationData.resignWins}
+              </div>
+              <div className="text-[10px] text-[#EF4444]">
+                Своя сдача: {terminationData.resignLosses}
+              </div>
+            </div>
+            <div className="p-2.5 rounded-lg bg-[#121212] border border-[#262629]">
+              <div className="text-[10px] text-[#9CA3AF] uppercase">По времени (Флаг)</div>
+              <div className="text-sm font-bold text-[#D97706] mt-0.5">
+                +{terminationData.timeoutWins} / -{terminationData.timeoutLosses}
+              </div>
+              <div className="text-[10px] text-[#9CA3AF]">Контроль флага</div>
+            </div>
+            <div className="p-2.5 rounded-lg bg-[#121212] border border-[#262629]">
+              <div className="text-[10px] text-[#9CA3AF] uppercase">Ничьи (½-½)</div>
+              <div className="text-sm font-bold text-[#F3F4F6] mt-0.5">
+                {terminationData.draws}
+              </div>
+              <div className="text-[10px] text-[#9CA3AF]">Пат / Повтор</div>
+            </div>
+          </div>
+        </section>
+
+        {/* Recent Real Games Table with 1-Click Load to Board */}
+        <section className="lg:col-span-6 rounded-xl bg-[#1E1E1E] border border-[#2A2A2E] p-5 flex flex-col justify-between">
+          <div>
+            <div className="flex items-center justify-between gap-2">
+              <div>
+                <h2 className="text-base font-semibold text-[#F3F4F6]">
+                  История сыгранных партий Lichess ({recentGames.length})
+                </h2>
+                <p className="text-xs text-[#9CA3AF] mt-0.5">
+                  Нажмите «Разбор партии →», чтобы пошагово воспроизвести все ходы и часы на доске
+                </p>
+              </div>
+            </div>
+
+            <div className="divide-y divide-[#2A2A2E] mt-3 max-h-64 overflow-y-auto pr-1">
+              {recentGames.slice(0, 6).map((gm) => {
+                const resBadge =
+                  gm.result === 'W'
+                    ? { text: 'ПОБЕДА', cls: 'text-[#10B981]' }
+                    : gm.result === 'L'
+                      ? { text: 'ПОРАЖЕНИЕ', cls: 'text-[#EF4444]' }
+                      : { text: 'НИЧЬЯ', cls: 'text-[#9CA3AF]' };
+                return (
+                  <div
+                    key={gm.id}
+                    className="py-2.5 flex items-center justify-between gap-3"
+                  >
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-2 text-xs">
+                        <span className={`font-mono font-bold ${resBadge.cls}`}>
+                          {resBadge.text}
+                        </span>
+                        <span className="text-[#6B7280]">·</span>
+                        <span className="font-semibold text-[#F3F4F6] truncate">
+                          vs {gm.opponentName} ({gm.opponentRating})
+                        </span>
+                        <span className="text-[#6B7280]">·</span>
+                        <span className="font-mono text-[#9CA3AF]">{gm.createdAtStr}</span>
+                      </div>
+                      <div className="text-[11px] text-[#9CA3AF] font-mono mt-0.5 truncate">
+                        {gm.eco} {gm.openingName} · {gm.statusRu}
+                        {gm.accuracyPct ? ` · Точность ${gm.accuracyPct}%` : ''}
+                      </div>
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        triggerFlutterHaptic(
+                          'HapticFeedback.mediumImpact()',
+                          `Загрузка партии vs ${gm.opponentName} на доску анализа`,
+                          onLogHaptic
+                        );
+                        onInspectRealGameOnBoard(gm);
+                      }}
+                      className="px-3 py-1.5 rounded-lg bg-[#121212] hover:bg-[#27272A] border border-[#2E2E32] text-xs font-semibold text-[#D97706] transition-colors whitespace-nowrap shrink-0"
+                    >
+                      Разбор партии →
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+
+          <div className="mt-3 pt-3 border-t border-[#2A2A2E] flex items-center justify-between text-xs text-[#9CA3AF]">
+            <span>Полная запись ходов UCI + пошаговый хронометраж</span>
+            <button
+              type="button"
+              onClick={onOpenAccountModal}
+              className="text-[#D97706] hover:underline font-semibold"
+            >
+              Синхронизировать свежие партии с Lichess.org →
+            </button>
           </div>
         </section>
       </div>
@@ -388,7 +638,7 @@ export function AdvancedStatsView({
                   : 'bg-[#121212] border-[#2A2A2E] text-[#9CA3AF] hover:text-[#F3F4F6]'
               }`}
             >
-              {onlyBlindSpots ? 'Показаны слепые зоны (3)' : 'Подсветить слепые зоны'}
+              {onlyBlindSpots ? `Показаны слепые зоны (${blindSpotIds.size})` : 'Подсветить слепые зоны'}
             </button>
 
             <input
@@ -530,7 +780,7 @@ export function AdvancedStatsView({
 
             {/* Bar Heatmap by Move Number */}
             <div className="mt-5 grid grid-cols-10 gap-2 items-end h-36 pt-4 px-2 rounded-lg bg-[#121212] border border-[#262629]">
-              {TIME_HEATMAP_BUCKETS.map((b) => {
+              {timeBuckets.map((b) => {
                 const anomaly = classifyMoveTimeAnomaly(
                   b.avgSecondsSpent,
                   b.remainingClockSec
@@ -580,7 +830,7 @@ export function AdvancedStatsView({
             <div className="text-xs font-semibold text-[#F3F4F6]">
               Соотношение среднего темпа игры к проценту точности по стадиям:
             </div>
-            {STAGE_ACCURACY_SUMMARY.map((st) => (
+            {stageSummary.map((st) => (
               <div
                 key={st.stage}
                 className="flex items-center justify-between text-xs py-1.5 border-b border-[#262629] last:border-none"
@@ -607,7 +857,7 @@ export function AdvancedStatsView({
             </p>
 
             <div className="divide-y divide-[#2A2A2E] mt-3">
-              {TACTICAL_MISTAKE_PATTERNS.map((pat) => (
+              {mistakePatterns.map((pat) => (
                 <div
                   key={pat.motif}
                   className="py-2.5 flex items-center justify-between gap-3"
@@ -635,10 +885,10 @@ export function AdvancedStatsView({
 
           <div className="mt-4 pt-4 border-t border-[#2A2A2E]">
             <div className="text-xs font-semibold text-[#F3F4F6] mb-2.5">
-              Сгенерированные задачи по вашим партиям ({PERSONAL_MISTAKE_PUZZLES.length}):
+              Сгенерированные задачи по вашим партиям ({personalPuzzles.length}):
             </div>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-              {PERSONAL_MISTAKE_PUZZLES.slice(0, 2).map((puz) => (
+              {personalPuzzles.slice(0, 2).map((puz) => (
                 <div
                   key={puz.id}
                   className="p-3 rounded-lg bg-[#121212] border border-[#2A2A2E] flex flex-col justify-between gap-2"

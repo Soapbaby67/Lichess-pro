@@ -1,21 +1,40 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   BoardThemeId,
+  PieceSetId,
+  AnalyzedPlyDto,
+  RealPlayedGameSummaryDto,
   POST_GAME_ANALYSIS_MOVES,
   CRITICAL_MOMENTS_CARDS,
   applyUciMoveToFen,
+  replayUciMovesToAnalyzedPlies,
 } from '../logic/chessAnalytics';
 import {
   InteractiveChessboard,
   SmoothedEvalBarWidget,
   AdaptiveChessClockWidget,
   BOARD_THEMES,
+  PIECE_SETS,
 } from './InteractiveChessboard';
+import {
+  startLichessAiMatch,
+  connectLichessGameStream,
+  sendLichessBoardMove,
+  resignLichessBoardGame,
+} from '../logic/lichessApiClient';
 import { triggerFlutterHaptic, HapticEventLog } from '../utils/haptics';
 
 interface AnalysisAndBoardViewProps {
   externalFenOverride?: { fen: string; label: string; evalCp: number } | null;
   onClearExternalFen?: () => void;
+  externalRealGame?: RealPlayedGameSummaryDto | null;
+  onClearExternalRealGame?: () => void;
+  boardTheme: BoardThemeId;
+  onChangeBoardTheme: (theme: BoardThemeId) => void;
+  pieceSet: PieceSetId;
+  onChangePieceSet: (pieceSet: PieceSetId) => void;
+  lichessToken: string;
+  onOpenAccountModal: () => void;
   hapticLogs: HapticEventLog[];
   onLogHaptic: (entry: HapticEventLog) => void;
 }
@@ -23,23 +42,78 @@ interface AnalysisAndBoardViewProps {
 export function AnalysisAndBoardView({
   externalFenOverride,
   onClearExternalFen,
+  externalRealGame,
+  onClearExternalRealGame,
+  boardTheme,
+  onChangeBoardTheme,
+  pieceSet,
+  onChangePieceSet,
+  lichessToken,
+  onOpenAccountModal,
   hapticLogs,
   onLogHaptic,
 }: AnalysisAndBoardViewProps) {
   const [activePlyIdx, setActivePlyIdx] = useState<number>(2);
   const [customFen, setCustomFen] = useState<string | null>(null);
-  const [boardTheme, setBoardTheme] = useState<BoardThemeId>('oled_minimalist');
   const [legalDotOpacity, setLegalDotOpacity] = useState<number>(0.55);
   const [flipped, setFlipped] = useState<boolean>(false);
   const [quickActionsOpen, setQuickActionsOpen] = useState<boolean>(false);
   const [gameStatusBanner, setGameStatusBanner] = useState<string | null>(null);
 
-  // Clock simulation state
+  // Clock state
   const [clockRunning, setClockRunning] = useState<boolean>(false);
   const [whiteClockMs, setWhiteClockMs] = useState<number>(24_800);
   const [blackClockMs, setBlackClockMs] = useState<number>(9_400);
 
-  const currentPly = POST_GAME_ANALYSIS_MOVES[activePlyIdx] || POST_GAME_ANALYSIS_MOVES[0];
+  // Live Lichess Board API Game state
+  const [liveGameId, setLiveGameId] = useState<string | null>(null);
+  const [liveAiLevel, setLiveAiLevel] = useState<number>(4);
+  const [liveClockMinutes, setLiveClockMinutes] = useState<number>(3);
+  const [liveIncrementSec, setLiveIncrementSec] = useState<number>(2);
+  const [liveColorChoice, setLiveColorChoice] = useState<'white' | 'black' | 'random'>('white');
+  const [isStartingLiveGame, setIsStartingLiveGame] = useState<boolean>(false);
+  const [liveMovesPlies, setLiveMovesPlies] = useState<AnalyzedPlyDto[] | null>(null);
+  const stopLiveStreamRef = useRef<(() => void) | null>(null);
+
+  // Determine active move list (Live Lichess game > Real inspected game > Default Post-Game Analysis)
+  const inspectedRealGamePlies = React.useMemo(() => {
+    if (!externalRealGame) return null;
+    const plies = replayUciMovesToAnalyzedPlies(
+      externalRealGame.movesUci,
+      externalRealGame.movesSan,
+      externalRealGame.clocksCentis
+    );
+    return plies.length > 0 ? plies : null;
+  }, [externalRealGame]);
+
+  const activeMoveList =
+    liveMovesPlies && liveMovesPlies.length > 0
+      ? liveMovesPlies
+      : inspectedRealGamePlies ?? POST_GAME_ANALYSIS_MOVES;
+
+  const currentPly =
+    activeMoveList[Math.min(activePlyIdx, activeMoveList.length - 1)] ||
+    activeMoveList[0];
+
+  useEffect(() => {
+    if (externalRealGame && inspectedRealGamePlies) {
+      const targetIdx = Math.max(0, inspectedRealGamePlies.length - 1);
+      setActivePlyIdx(targetIdx);
+      setCustomFen(null);
+      const ply = inspectedRealGamePlies[targetIdx];
+      if (ply) {
+        setWhiteClockMs(ply.whiteClockMs);
+        setBlackClockMs(ply.blackClockMs);
+      }
+      setFlipped(externalRealGame.playerColor === 'black');
+    }
+  }, [externalRealGame, inspectedRealGamePlies]);
+
+  useEffect(() => {
+    return () => {
+      stopLiveStreamRef.current?.();
+    };
+  }, []);
 
   useEffect(() => {
     if (!clockRunning) return;
@@ -54,8 +128,8 @@ export function AnalysisAndBoardView({
   const effectiveMate = externalFenOverride ? undefined : currentPly.mate;
 
   const handleSelectPly = (idx: number, reason: string) => {
-    const clamped = Math.max(0, Math.min(POST_GAME_ANALYSIS_MOVES.length - 1, idx));
-    const targetPly = POST_GAME_ANALYSIS_MOVES[clamped];
+    const clamped = Math.max(0, Math.min(activeMoveList.length - 1, idx));
+    const targetPly = activeMoveList[clamped];
     setActivePlyIdx(clamped);
     setCustomFen(null);
     onClearExternalFen?.();
@@ -64,7 +138,63 @@ export function AnalysisAndBoardView({
     triggerFlutterHaptic('HapticFeedback.selectionClick()', reason, onLogHaptic);
   };
 
-  const handleMakeMoveOnBoard = (uci: string, fromSq: string, toSq: string) => {
+  const handleStartLiveLichessGame = async () => {
+    if (!lichessToken.trim()) {
+      onOpenAccountModal();
+      return;
+    }
+    setIsStartingLiveGame(true);
+    setGameStatusBanner(null);
+    stopLiveStreamRef.current?.();
+
+    try {
+      const created = await startLichessAiMatch(lichessToken, {
+        level: liveAiLevel,
+        clockLimitSec: liveClockMinutes * 60,
+        clockIncrementSec: liveIncrementSec,
+        color: liveColorChoice,
+      });
+      setLiveGameId(created.id);
+      setCustomFen(null);
+      onClearExternalFen?.();
+      onClearExternalRealGame?.();
+      setGameStatusBanner(
+        `Живая партия Lichess #${created.id} запущена (Stockfish Level ${liveAiLevel})! Делайте ход на доске.`
+      );
+
+      const abortFn = await connectLichessGameStream(
+        lichessToken,
+        created.id,
+        (state) => {
+          const plies = replayUciMovesToAnalyzedPlies(state.movesUci);
+          if (plies.length > 0) {
+            setLiveMovesPlies(plies);
+            setActivePlyIdx(plies.length - 1);
+          }
+          setCustomFen(null);
+          setWhiteClockMs(state.wtimeMs);
+          setBlackClockMs(state.btimeMs);
+          if (state.status !== 'started' && state.status !== 'created') {
+            setGameStatusBanner(
+              `Партия Lichess #${created.id} завершена (${state.status}${state.winner ? `, победитель: ${state.winner}` : ''}).`
+            );
+          }
+        },
+        (errMsg) => {
+          setGameStatusBanner(`Поток партии Lichess: ${errMsg}`);
+        }
+      );
+      stopLiveStreamRef.current = abortFn;
+    } catch (err) {
+      setGameStatusBanner(
+        err instanceof Error ? err.message : 'Ошибка запуска онлайн-партии Lichess'
+      );
+    } finally {
+      setIsStartingLiveGame(false);
+    }
+  };
+
+  const handleMakeMoveOnBoard = async (uci: string, fromSq: string, toSq: string) => {
     const res = applyUciMoveToFen(effectiveFen, uci);
     setCustomFen(res.nextFen);
     if (res.promoted) {
@@ -86,6 +216,16 @@ export function AnalysisAndBoardView({
         onLogHaptic
       );
     }
+
+    if (liveGameId && lichessToken) {
+      try {
+        await sendLichessBoardMove(lichessToken, liveGameId, uci);
+      } catch (err) {
+        setGameStatusBanner(
+          err instanceof Error ? err.message : `Не удалось отправить ход ${uci} на Lichess`
+        );
+      }
+    }
   };
 
   return (
@@ -94,10 +234,10 @@ export function AnalysisAndBoardView({
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-4 border-b border-[#262629]">
         <div>
           <h1 className="text-xl sm:text-2xl font-bold tracking-tight text-[#F3F4F6]">
-            02. Модернизированная доска, Eval Bar и Послематчевый анализ QoL
+            02. Модернизированная доска, Темы, Фигуры и Онлайн-игра Lichess
           </h1>
           <p className="text-sm text-[#9CA3AF] mt-1">
-            True Dark OLED <code className="font-mono text-xs text-[#D97706]">#121212</code> · Сглаженный Eval Bar · Адаптивные часы (&lt;30с / &lt;10с) · Один клик к перелому
+            6 стилей доски · 4 векторных набора фигур · Сглаженный Eval Bar · Прямое подключение к <code className="font-mono text-xs text-[#D97706]">lichess.org/api/board</code>
           </p>
         </div>
 
@@ -130,6 +270,29 @@ export function AnalysisAndBoardView({
             className="text-xs font-semibold text-[#D97706] hover:underline whitespace-nowrap"
           >
             Вернуться к партии анализа
+          </button>
+        </div>
+      )}
+
+      {externalRealGame && (
+        <div className="px-4 py-3 rounded-xl bg-[#1E1E1E] border border-[#10B981] flex flex-wrap items-center justify-between gap-3">
+          <div className="text-xs text-[#F3F4F6]">
+            Разбор реальной партии с Lichess:{' '}
+            <strong>
+              vs {externalRealGame.opponentName} ({externalRealGame.opponentRating})
+            </strong>{' '}
+            · {externalRealGame.eco} {externalRealGame.openingName} · Ходов:{' '}
+            <span className="font-mono">{activeMoveList.length}</span>
+          </div>
+          <button
+            type="button"
+            onClick={() => {
+              onClearExternalRealGame?.();
+              setActivePlyIdx(2);
+            }}
+            className="text-xs font-semibold text-[#10B981] hover:underline whitespace-nowrap"
+          >
+            Сбросить к демо-партии
           </button>
         </div>
       )}
@@ -191,7 +354,7 @@ export function AnalysisAndBoardView({
                   'Отправлено предложение ничьей',
                   onLogHaptic
                 );
-                setGameStatusBanner('Предложение ничьей отправлено сопернику через WebSocket.');
+                setGameStatusBanner('Предложение ничьей отправлено сопернику через Lichess API.');
                 setQuickActionsOpen(false);
               }}
               className="py-2.5 px-4 rounded-lg bg-[#121212] hover:bg-[#27272A] border border-[#2E2E32] text-xs font-semibold text-[#FDE68A] transition-colors"
@@ -201,12 +364,15 @@ export function AnalysisAndBoardView({
 
             <button
               type="button"
-              onClick={() => {
+              onClick={async () => {
                 triggerFlutterHaptic(
                   'HapticFeedback.heavyImpact()',
                   'Подтверждение сдачи партии',
                   onLogHaptic
                 );
+                if (liveGameId && lichessToken) {
+                  await resignLichessBoardGame(lichessToken, liveGameId);
+                }
                 setGameStatusBanner('Партия завершена: сдача зафиксирована.');
                 setQuickActionsOpen(false);
               }}
@@ -223,8 +389,14 @@ export function AnalysisAndBoardView({
         <div className="lg:col-span-6 rounded-xl bg-[#1E1E1E] border border-[#2A2A2E] p-5 space-y-4">
           {/* Opponent Clock (Top) */}
           <AdaptiveChessClockWidget
-            playerName="DarkSquare99"
-            rating={2160}
+            playerName={
+              liveGameId
+                ? `Stockfish Level ${liveAiLevel} (Lichess Live)`
+                : externalRealGame
+                  ? externalRealGame.opponentName
+                  : 'DarkSquare99'
+            }
+            rating={externalRealGame ? externalRealGame.opponentRating : 2160}
             remainingMs={blackClockMs}
             isActive={true}
             sideLabel="Черные"
@@ -241,6 +413,7 @@ export function AnalysisAndBoardView({
             <InteractiveChessboard
               fen={effectiveFen}
               themeId={boardTheme}
+              pieceSetId={pieceSet}
               legalDotOpacity={legalDotOpacity}
               lastMoveFrom={currentPly.from}
               lastMoveTo={currentPly.to}
@@ -265,7 +438,11 @@ export function AnalysisAndBoardView({
 
           {/* Player Clock (Bottom) */}
           <AdaptiveChessClockWidget
-            playerName="Вы (Grandmaster_RU)"
+            playerName={
+              externalRealGame
+                ? `Вы (${externalRealGame.playerColor === 'white' ? 'Белые' : 'Черные'})`
+                : 'Вы (Grandmaster_RU)'
+            }
             rating={2154}
             remainingMs={whiteClockMs}
             isActive={false}
@@ -286,13 +463,15 @@ export function AnalysisAndBoardView({
             <div className="text-xs font-mono text-center text-[#F3F4F6]">
               <span className="font-bold text-[#D97706]">{currentPly.san}</span>
               {' · '}
-              <span className="text-[#9CA3AF]">Время на ход: {currentPly.moveTimeSec}с</span>
+              <span className="text-[#9CA3AF]">
+                Ход {activePlyIdx + 1}/{activeMoveList.length} ({currentPly.moveTimeSec}с)
+              </span>
             </div>
 
             <button
               type="button"
               onClick={() => handleSelectPly(activePlyIdx + 1, 'Следующий ход анализа')}
-              disabled={activePlyIdx >= POST_GAME_ANALYSIS_MOVES.length - 1}
+              disabled={activePlyIdx >= activeMoveList.length - 1}
               className="px-3 py-1.5 rounded-lg bg-[#121212] border border-[#2E2E32] text-xs font-semibold text-[#F3F4F6] disabled:opacity-40 hover:bg-[#27272A]"
             >
               След. ход →
@@ -300,93 +479,115 @@ export function AnalysisAndBoardView({
           </div>
         </div>
 
-        {/* Right Column: One-Click Critical Moments + Board Customizer + Clock & Haptic Controls */}
+        {/* Right Column: Live Lichess Match Launcher + Board/Piece Customizer + Critical Moments */}
         <div className="lg:col-span-6 space-y-5">
-          {/* One-Click Critical Moments ("Один клик к перелому") */}
-          <section className="rounded-xl bg-[#1E1E1E] border border-[#2A2A2E] p-5">
-            <h2 className="text-base font-semibold text-[#F3F4F6]">
-              Один клик к перелому (Post-Game Key Moments)
-            </h2>
-            <p className="text-xs text-[#9CA3AF] mt-0.5">
-              Мгновенный переход к ключевым позициям партии с пересчетом Eval Bar и часов
-            </p>
+          {/* Live Lichess Match Launcher (Board API) */}
+          <section className="rounded-xl bg-[#1E1E1E] border border-[#2A2A2E] p-5 space-y-3">
+            <div className="flex items-center justify-between gap-2">
+              <div>
+                <h2 className="text-base font-semibold text-[#F3F4F6]">
+                  Живая онлайн-партия на сервере Lichess (Board API)
+                </h2>
+                <p className="text-xs text-[#9CA3AF] mt-0.5">
+                  Создает реальную игру на вашем аккаунте <code className="font-mono text-[#10B981]">lichess.org</code> и транслирует ходы в реальном времени
+                </p>
+              </div>
+              {liveGameId && (
+                <a
+                  href={`https://lichess.org/${liveGameId}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-xs font-mono text-[#10B981] underline shrink-0"
+                >
+                  #{liveGameId} ↗
+                </a>
+              )}
+            </div>
 
-            <div className="space-y-2.5 mt-4">
-              {CRITICAL_MOMENTS_CARDS.map((card) => {
-                const isSelected = activePlyIdx === card.plyIndex && !customFen && !externalFenOverride;
-                const accentBorder =
-                  card.kind === 'critical_blunder'
-                    ? 'border-[#EF4444]'
-                    : card.kind === 'turning_point'
-                      ? 'border-[#D97706]'
-                      : 'border-[#10B981]';
+            <div className="grid grid-cols-3 gap-2 pt-1">
+              <div>
+                <label className="block text-[11px] text-[#9CA3AF] mb-1">
+                  Уровень Stockfish
+                </label>
+                <select
+                  value={liveAiLevel}
+                  onChange={(e) => setLiveAiLevel(Number(e.target.value))}
+                  className="w-full rounded-lg bg-[#121212] border border-[#2E2E32] px-2.5 py-1.5 text-xs text-[#F3F4F6]"
+                >
+                  {[1, 2, 3, 4, 5, 6, 7, 8].map((lvl) => (
+                    <option key={lvl} value={lvl}>
+                      Уровень {lvl}
+                    </option>
+                  ))}
+                </select>
+              </div>
 
-                const badgeColor =
-                  card.kind === 'critical_blunder'
-                    ? 'text-[#FCA5A5]'
-                    : card.kind === 'turning_point'
-                      ? 'text-[#FDE68A]'
-                      : 'text-[#6EE7B7]';
+              <div>
+                <label className="block text-[11px] text-[#9CA3AF] mb-1">
+                  Контроль времени
+                </label>
+                <select
+                  value={`${liveClockMinutes}+${liveIncrementSec}`}
+                  onChange={(e) => {
+                    const [m, inc] = e.target.value.split('+').map(Number);
+                    setLiveClockMinutes(m);
+                    setLiveIncrementSec(inc);
+                  }}
+                  className="w-full rounded-lg bg-[#121212] border border-[#2E2E32] px-2.5 py-1.5 text-xs text-[#F3F4F6]"
+                >
+                  <option value="3+0">3+0 Blitz</option>
+                  <option value="3+2">3+2 Blitz</option>
+                  <option value="5+0">5+0 Blitz</option>
+                  <option value="10+0">10+0 Rapid</option>
+                </select>
+              </div>
 
-                return (
-                  <button
-                    key={card.id}
-                    type="button"
-                    onClick={() =>
-                      handleSelectPly(
-                        card.plyIndex,
-                        `Один клик к перелому: ${card.badgeRu} (${card.san})`
-                      )
-                    }
-                    className={`w-full text-left p-3.5 rounded-xl bg-[#121212] border transition-colors flex items-center justify-between gap-4 ${
-                      isSelected ? accentBorder : 'border-[#2A2A2E] hover:border-[#3F3F46]'
-                    }`}
-                  >
-                    <div className="min-w-0 space-y-1">
-                      <div className="flex items-center gap-2 text-xs">
-                        <span className={`font-bold ${badgeColor}`}>
-                          {card.badgeRu}
-                        </span>
-                        <span aria-hidden="true" className="text-[#6B7280]">·</span>
-                        <span className="font-mono font-bold text-[#F3F4F6]">
-                          {card.san}
-                        </span>
-                        <span aria-hidden="true" className="text-[#6B7280]">·</span>
-                        <span className="font-mono text-[#9CA3AF]">
-                          Лучший ход: {card.bestEngineMoveSan}
-                        </span>
-                      </div>
-                      <p className="text-xs text-[#9CA3AF] leading-relaxed">
-                        {card.summaryRu}
-                      </p>
-                    </div>
+              <div>
+                <label className="block text-[11px] text-[#9CA3AF] mb-1">
+                  Ваш цвет
+                </label>
+                <select
+                  value={liveColorChoice}
+                  onChange={(e) =>
+                    setLiveColorChoice(e.target.value as 'white' | 'black' | 'random')
+                  }
+                  className="w-full rounded-lg bg-[#121212] border border-[#2E2E32] px-2.5 py-1.5 text-xs text-[#F3F4F6]"
+                >
+                  <option value="white">Белые</option>
+                  <option value="black">Черные</option>
+                  <option value="random">Случайный</option>
+                </select>
+              </div>
+            </div>
 
-                    <div className="text-right font-mono tabular-nums shrink-0">
-                      <div className="text-xs font-bold text-[#F3F4F6]">
-                        +{(card.evalAfterCp / 100).toFixed(1)}
-                      </div>
-                      <div className="text-[11px] text-[#D97706] mt-0.5">
-                        Перейти →
-                      </div>
-                    </div>
-                  </button>
-                );
-              })}
+            <div className="flex items-center gap-2 pt-1">
+              <button
+                type="button"
+                onClick={handleStartLiveLichessGame}
+                disabled={isStartingLiveGame}
+                className="flex-1 py-2 px-4 rounded-lg bg-[#D97706] hover:bg-[#B45309] text-[#121212] font-bold text-xs transition-colors disabled:opacity-50"
+              >
+                {isStartingLiveGame
+                  ? 'Создание партии на сервере Lichess...'
+                  : lichessToken
+                    ? 'Запустить реальную партию на Lichess.org'
+                    : 'Войти по токену Lichess для запуска живой игры'}
+              </button>
             </div>
           </section>
 
-          {/* Visual & Aesthetics: Board Themes, Dot Opacity & Clock Threshold Simulator */}
+          {/* Visual & Aesthetics: 6 Board Themes + 4 Piece Sets + Dot Opacity */}
           <section className="rounded-xl bg-[#1E1E1E] border border-[#2A2A2E] p-5 space-y-4">
             <h2 className="text-base font-semibold text-[#F3F4F6]">
-              Кастомизация доски и тестирование индикаторов цейтнота
+              Новые дизайны тем доски (6) и наборов фигур (4)
             </h2>
 
-            {/* Board Theme Selector */}
+            {/* 6 Board Themes */}
             <div>
               <div className="text-xs text-[#9CA3AF] mb-2">
                 Стиль шахматной доски (Custom Board Styles):
               </div>
-              <div className="grid grid-cols-3 gap-2">
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
                 {(Object.keys(BOARD_THEMES) as BoardThemeId[]).map((tId) => {
                   const spec = BOARD_THEMES[tId];
                   const active = boardTheme === tId;
@@ -400,7 +601,7 @@ export function AnalysisAndBoardView({
                           `Стиль доски: ${spec.labelRu}`,
                           onLogHaptic
                         );
-                        setBoardTheme(tId);
+                        onChangeBoardTheme(tId);
                       }}
                       className={`p-2.5 rounded-lg border text-left transition-colors ${
                         active
@@ -408,7 +609,7 @@ export function AnalysisAndBoardView({
                           : 'bg-[#121212] border-[#2A2A2E] hover:border-[#3F3F46]'
                       }`}
                     >
-                      <div className="flex items-center gap-1.5 mb-1.5">
+                      <div className="flex items-center gap-1.5 mb-1">
                         <span
                           className="w-3.5 h-3.5 rounded-sm border border-white/10"
                           style={{ backgroundColor: spec.lightSquare }}
@@ -427,11 +628,50 @@ export function AnalysisAndBoardView({
               </div>
             </div>
 
+            {/* 4 Vector Piece Sets */}
+            <div className="pt-2 border-t border-[#2A2A2E]">
+              <div className="text-xs text-[#9CA3AF] mb-2">
+                Дизайн шахматных фигур (Custom Piece Sets):
+              </div>
+              <div className="grid grid-cols-2 gap-2">
+                {(Object.keys(PIECE_SETS) as PieceSetId[]).map((pId) => {
+                  const spec = PIECE_SETS[pId];
+                  const active = pieceSet === pId;
+                  return (
+                    <button
+                      key={pId}
+                      type="button"
+                      onClick={() => {
+                        triggerFlutterHaptic(
+                          'HapticFeedback.selectionClick()',
+                          `Набор фигур: ${spec.labelRu}`,
+                          onLogHaptic
+                        );
+                        onChangePieceSet(pId);
+                      }}
+                      className={`p-2.5 rounded-lg border text-left transition-colors ${
+                        active
+                          ? 'bg-[#121212] border-[#10B981]'
+                          : 'bg-[#121212] border-[#2A2A2E] hover:border-[#3F3F46]'
+                      }`}
+                    >
+                      <div className="text-xs font-semibold text-[#F3F4F6] truncate">
+                        {spec.labelRu}
+                      </div>
+                      <div className="text-[10px] text-[#9CA3AF] truncate mt-0.5">
+                        {spec.subtitleRu}
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
             {/* Legal Move Dot Opacity Slider */}
-            <div>
+            <div className="pt-2 border-t border-[#2A2A2E]">
               <div className="flex items-center justify-between text-xs mb-1.5">
                 <label htmlFor="dot-opacity-slider" className="text-[#9CA3AF]">
-                  Прозрачность маркеров легальных ходов (кликните по фигуре на доске):
+                  Прозрачность маркеров легальных ходов:
                 </label>
                 <span className="font-mono font-semibold text-[#F3F4F6]">
                   {Math.round(legalDotOpacity * 100)}%
@@ -497,6 +737,86 @@ export function AnalysisAndBoardView({
                   &lt; 10с (00:06.4)
                 </button>
               </div>
+            </div>
+          </section>
+
+          {/* One-Click Critical Moments ("Один клик к перелому") */}
+          <section className="rounded-xl bg-[#1E1E1E] border border-[#2A2A2E] p-5">
+            <h2 className="text-base font-semibold text-[#F3F4F6]">
+              Один клик к перелому (Post-Game Key Moments)
+            </h2>
+            <p className="text-xs text-[#9CA3AF] mt-0.5">
+              Мгновенный переход к ключевым позициям партии с пересчетом Eval Bar и часов
+            </p>
+
+            <div className="space-y-2.5 mt-4">
+              {CRITICAL_MOMENTS_CARDS.map((card) => {
+                const isSelected =
+                  activePlyIdx === card.plyIndex &&
+                  !customFen &&
+                  !externalFenOverride &&
+                  !externalRealGame &&
+                  !liveMovesPlies;
+                const accentBorder =
+                  card.kind === 'critical_blunder'
+                    ? 'border-[#EF4444]'
+                    : card.kind === 'turning_point'
+                      ? 'border-[#D97706]'
+                      : 'border-[#10B981]';
+
+                const badgeColor =
+                  card.kind === 'critical_blunder'
+                    ? 'text-[#FCA5A5]'
+                    : card.kind === 'turning_point'
+                      ? 'text-[#FDE68A]'
+                      : 'text-[#6EE7B7]';
+
+                return (
+                  <button
+                    key={card.id}
+                    type="button"
+                    onClick={() => {
+                      onClearExternalRealGame?.();
+                      setLiveMovesPlies(null);
+                      handleSelectPly(
+                        card.plyIndex,
+                        `Один клик к перелому: ${card.badgeRu} (${card.san})`
+                      );
+                    }}
+                    className={`w-full text-left p-3.5 rounded-xl bg-[#121212] border transition-colors flex items-center justify-between gap-4 ${
+                      isSelected ? accentBorder : 'border-[#2A2A2E] hover:border-[#3F3F46]'
+                    }`}
+                  >
+                    <div className="min-w-0 space-y-1">
+                      <div className="flex items-center gap-2 text-xs">
+                        <span className={`font-bold ${badgeColor}`}>
+                          {card.badgeRu}
+                        </span>
+                        <span aria-hidden="true" className="text-[#6B7280]">·</span>
+                        <span className="font-mono font-bold text-[#F3F4F6]">
+                          {card.san}
+                        </span>
+                        <span aria-hidden="true" className="text-[#6B7280]">·</span>
+                        <span className="font-mono text-[#9CA3AF]">
+                          Лучший ход: {card.bestEngineMoveSan}
+                        </span>
+                      </div>
+                      <p className="text-xs text-[#9CA3AF] leading-relaxed">
+                        {card.summaryRu}
+                      </p>
+                    </div>
+
+                    <div className="text-right font-mono tabular-nums shrink-0">
+                      <div className="text-xs font-bold text-[#F3F4F6]">
+                        +{(card.evalAfterCp / 100).toFixed(1)}
+                      </div>
+                      <div className="text-[11px] text-[#D97706] mt-0.5">
+                        Перейти →
+                      </div>
+                    </div>
+                  </button>
+                );
+              })}
             </div>
           </section>
 

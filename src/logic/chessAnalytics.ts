@@ -1,7 +1,21 @@
 export type TimeframeFilter = 'day' | 'week' | 'month' | 'all';
 export type PerfControl = 'bullet' | 'blitz' | 'rapid' | 'classical';
 export type RepertoireColorFilter = 'all' | 'white' | 'black';
-export type BoardThemeId = 'oled_minimalist' | 'slate_grey' | 'wood_classic';
+
+export type BoardThemeId =
+  | 'oled_minimalist'
+  | 'slate_grey'
+  | 'wood_classic'
+  | 'emerald_tournament'
+  | 'cyber_indigo'
+  | 'amber_walnut';
+
+export type PieceSetId =
+  | 'neo_staunton'
+  | 'alpha_minimal'
+  | 'imperial_crown'
+  | 'oled_neon_edge';
+
 export type FormStatus = 'peak' | 'stable' | 'slump';
 export type TacticalMotif =
   | 'missed_pin'
@@ -94,6 +108,47 @@ export interface StreakFormDto {
   ratingDeltaLast10: number;
 }
 
+export interface TerminationBreakdownDto {
+  mateWins: number;
+  resignWins: number;
+  timeoutWins: number;
+  mateLosses: number;
+  resignLosses: number;
+  timeoutLosses: number;
+  draws: number;
+}
+
+export interface ColorPerformanceDto {
+  whiteWins: number;
+  whiteDraws: number;
+  whiteLosses: number;
+  whiteAvgAccuracy: number;
+  blackWins: number;
+  blackDraws: number;
+  blackLosses: number;
+  blackAvgAccuracy: number;
+  avgOpponentRating: number;
+  peakRating: number;
+}
+
+export interface RealPlayedGameSummaryDto {
+  id: string;
+  createdAtStr: string;
+  perf: string;
+  speedLabel: string;
+  playerColor: 'white' | 'black';
+  opponentName: string;
+  opponentRating: number;
+  result: 'W' | 'D' | 'L';
+  statusRu: string;
+  eco: string;
+  openingName: string;
+  movesUci: string[];
+  movesSan: string[];
+  clocksCentis: number[];
+  accuracyPct?: number;
+}
+
 export type CriticalMomentKind = 'critical_blunder' | 'turning_point' | 'best_tactical_strike';
 
 export interface CriticalMomentDto {
@@ -133,6 +188,9 @@ export interface WinDrawLossPercentages {
   lossPct: number;
   totalGames: number;
 }
+
+export const INITIAL_CHESS_FEN =
+  'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1';
 
 /**
  * Pure calculation of W/D/L percentages rounded to 1 decimal place with exact 100% sum.
@@ -180,12 +238,6 @@ export function detectOpeningBlindSpots(
 
 export type MoveTimeAnomaly = 'deep_think' | 'impulse_zeitnot' | 'normal';
 
-/**
- * Classifies a move's time management state:
- * - 'deep_think': >= 18s spent on a single move ("ступор")
- * - 'impulse_zeitnot': <= 2.2s spent when clock is under 25s ("импульсивный блиц-ход в цейтноте")
- * - 'normal': balanced pace
- */
 export function classifyMoveTimeAnomaly(
   secondsSpent: number,
   remainingClockSec: number
@@ -199,9 +251,6 @@ export function classifyMoveTimeAnomaly(
   return 'normal';
 }
 
-/**
- * Lichess Stockfish Eval Bar sigmoid curve mapping centipawns / mate to white bar height percentage [3..97].
- */
 export function computeEvalBarPercentage(evalInput: { cp?: number; mate?: number }): number {
   if (typeof evalInput.mate === 'number') {
     return evalInput.mate > 0 ? 97 : 3;
@@ -223,9 +272,6 @@ export function formatEvalBadge(evalInput: { cp?: number; mate?: number }): stri
 
 export type ClockUrgency = 'normal' | 'warning' | 'critical';
 
-/**
- * Classifies clock urgency according to Lichess QoL specification (<30s warning, <10s critical pulse).
- */
 export function classifyClockUrgency(remainingMs: number): ClockUrgency {
   if (remainingMs < 10_000) {
     return 'critical';
@@ -254,9 +300,6 @@ export interface BoardSquarePiece {
   color: 'w' | 'b';
 }
 
-/**
- * Parses standard FEN placement field into an 8x8 matrix (rank 8 at index 0 to rank 1 at index 7).
- */
 export function parseFenToBoard(fen: string): (BoardSquarePiece | null)[][] {
   const placement = fen.trim().split(/\s+/)[0] || '8/8/8/8/8/8/8/8';
   const rows = placement.split('/');
@@ -299,7 +342,7 @@ export function coordsToSquare(row: number, col: number): string {
 }
 
 /**
- * Applies a simple UCI move (e.g. "e2e4" or "f7f8q") to a FEN string and returns the new FEN.
+ * Applies a UCI move (including castling & promotion) to a FEN string.
  */
 export function applyUciMoveToFen(fen: string, uci: string): {
   nextFen: string;
@@ -327,6 +370,19 @@ export function applyUciMoveToFen(fen: string, uci: string): {
   const captured = targetPiece !== null;
   const isPawnPromotion =
     movingPiece.type === 'p' && (to.row === 0 || to.row === 7);
+
+  // Handle king castling rook movement
+  if (movingPiece.type === 'k' && Math.abs(to.col - from.col) === 2) {
+    if (to.col === 6) {
+      // Kingside castle
+      board[from.row][5] = board[from.row][7];
+      board[from.row][7] = null;
+    } else if (to.col === 2) {
+      // Queenside castle
+      board[from.row][3] = board[from.row][0];
+      board[from.row][0] = null;
+    }
+  }
 
   board[from.row][from.col] = null;
   board[to.row][to.col] = {
@@ -369,7 +425,7 @@ export function applyUciMoveToFen(fen: string, uci: string): {
 }
 
 /**
- * Generates realistic pseudo-legal destination squares for interactive board exploration.
+ * Generates pseudo-legal destination squares for interactive board exploration & online play.
  */
 export function getPseudoLegalTargets(fen: string, fromSquare: string): string[] {
   const coords = squareToCoords(fromSquare);
@@ -424,6 +480,15 @@ export function getPseudoLegalTargets(fen: string, fromSquare: string): string[]
         if (dr !== 0 || dc !== 0) addIfValid(row + dr, col + dc);
       }
     }
+    // Castling targets for convenience
+    if (piece.color === 'w' && row === 7 && col === 4) {
+      if (!board[7][5] && !board[7][6]) targets.push('g1');
+      if (!board[7][3] && !board[7][2] && !board[7][1]) targets.push('c1');
+    }
+    if (piece.color === 'b' && row === 0 && col === 4) {
+      if (!board[0][5] && !board[0][6]) targets.push('g8');
+      if (!board[0][3] && !board[0][2] && !board[0][1]) targets.push('c8');
+    }
   } else {
     const dirs: [number, number][] = [];
     if (piece.type === 'b' || piece.type === 'q') {
@@ -445,9 +510,180 @@ export function getPseudoLegalTargets(fen: string, fromSquare: string): string[]
   return targets;
 }
 
+/**
+ * Replays a sequence of space-separated UCI moves from initial FEN into AnalyzedPlyDto[]
+ * so any real Lichess game or live match can be scrubbed move-by-move on the board.
+ */
+export function replayUciMovesToAnalyzedPlies(
+  uciMoves: string[],
+  sanMoves?: string[],
+  clocksCentis?: number[]
+): AnalyzedPlyDto[] {
+  let currentFen = INITIAL_CHESS_FEN;
+  const plies: AnalyzedPlyDto[] = [];
+  let prevWhiteMs = 180_000;
+  let prevBlackMs = 180_000;
+
+  for (let i = 0; i < uciMoves.length; i++) {
+    const uci = uciMoves[i];
+    if (!uci || uci.length < 4) continue;
+    const side: 'white' | 'black' = i % 2 === 0 ? 'white' : 'black';
+    const moveNumber = Math.floor(i / 2) + 1;
+    const from = uci.slice(0, 2);
+    const to = uci.slice(2, 4);
+    const res = applyUciMoveToFen(currentFen, uci);
+    currentFen = res.nextFen;
+
+    const clockCenti = clocksCentis?.[i];
+    const currentClockMs =
+      typeof clockCenti === 'number' ? clockCenti * 10 : Math.max(5_000, 180_000 - i * 3200);
+
+    const moveTimeSec =
+      side === 'white'
+        ? Math.max(0.5, Math.round(((prevWhiteMs - currentClockMs) / 1000) * 10) / 10)
+        : Math.max(0.5, Math.round(((prevBlackMs - currentClockMs) / 1000) * 10) / 10);
+
+    if (side === 'white') prevWhiteMs = currentClockMs;
+    else prevBlackMs = currentClockMs;
+
+    const rawSan = sanMoves?.[i] || `${from}→${to}`;
+    const formattedSan =
+      side === 'white' ? `${moveNumber}. ${rawSan}` : `${moveNumber}... ${rawSan}`;
+
+    // Estimate evaluation from material balance on board
+    const board = parseFenToBoard(currentFen);
+    const values: Record<BoardSquarePiece['type'], number> = {
+      p: 100,
+      n: 310,
+      b: 330,
+      r: 500,
+      q: 900,
+      k: 0,
+    };
+    let materialCp = 0;
+    for (const row of board) {
+      for (const cell of row) {
+        if (cell) {
+          materialCp += cell.color === 'w' ? values[cell.type] : -values[cell.type];
+        }
+      }
+    }
+
+    plies.push({
+      plyIndex: i,
+      moveNumber,
+      side,
+      san: formattedSan,
+      from,
+      to,
+      fen: currentFen,
+      evalCp: materialCp,
+      whiteClockMs: prevWhiteMs,
+      blackClockMs: prevBlackMs,
+      moveTimeSec: Math.min(45, moveTimeSec),
+    });
+  }
+
+  return plies;
+}
+
 // ============================================================================
-// SEED DATA FOR ADVANCED STATS, REPERTOIRE MATRIX, HEATMAP, AND PUZZLES
+// DEFAULT / FALLBACK SEED DATA (USED BEFORE LOGIN OR IN OFFLINE MODE)
 // ============================================================================
+
+export const DEFAULT_TERMINATION_BREAKDOWN: TerminationBreakdownDto = {
+  mateWins: 28,
+  resignWins: 44,
+  timeoutWins: 19,
+  mateLosses: 14,
+  resignLosses: 26,
+  timeoutLosses: 15,
+  draws: 16,
+};
+
+export const DEFAULT_COLOR_PERFORMANCE: ColorPerformanceDto = {
+  whiteWins: 51,
+  whiteDraws: 9,
+  whiteLosses: 22,
+  whiteAvgAccuracy: 90.6,
+  blackWins: 40,
+  blackDraws: 7,
+  blackLosses: 33,
+  blackAvgAccuracy: 86.4,
+  avgOpponentRating: 2118,
+  peakRating: 2169,
+};
+
+export const DEFAULT_RECENT_GAMES: RealPlayedGameSummaryDto[] = [
+  {
+    id: 'lic-9981a',
+    createdAtStr: 'Сегодня, 22:30',
+    perf: 'blitz',
+    speedLabel: 'BLITZ 3+0',
+    playerColor: 'white',
+    opponentName: 'DarkSquare99',
+    opponentRating: 2160,
+    result: 'W',
+    statusRu: 'Мат',
+    eco: 'B90',
+    openingName: 'Сицилианская защита: Вариант Найдорфа',
+    movesUci: ['e2e4', 'c7c5', 'g1f3', 'd7d6', 'd2d4', 'c5d4', 'f3d4', 'g8f6', 'b1c3', 'a7a6', 'c1e3', 'e7e5'],
+    movesSan: ['e4', 'c5', 'Кf3', 'd6', 'd4', 'cxd4', 'Кxd4', 'Кf6', 'Кc3', 'a6', 'Сe3', 'e5'],
+    clocksCentis: [18000, 18000, 17850, 17900, 17620, 17710, 17400, 17200, 16900, 16500, 16100, 15400],
+    accuracyPct: 95.3,
+  },
+  {
+    id: 'lic-9980b',
+    createdAtStr: 'Сегодня, 21:00',
+    perf: 'blitz',
+    speedLabel: 'BLITZ 3+0',
+    playerColor: 'black',
+    opponentName: 'BlitzPhantom',
+    opponentRating: 2142,
+    result: 'W',
+    statusRu: 'Сдача',
+    eco: 'B12',
+    openingName: 'Защита Каро-Канн: Закрытый вариант',
+    movesUci: ['e2e4', 'c7c6', 'd2d4', 'd7d5', 'e4e5', 'c8f5', 'g1f3', 'e7e6', 'f1e2', 'c6c5'],
+    movesSan: ['e4', 'c6', 'd4', 'd5', 'e5', 'Сf5', 'Кf3', 'e6', 'Сe2', 'c5'],
+    clocksCentis: [18000, 18000, 17700, 17800, 17500, 17400, 17100, 16900, 16400, 16100],
+    accuracyPct: 92.6,
+  },
+  {
+    id: 'lic-9979c',
+    createdAtStr: 'Сегодня, 19:10',
+    perf: 'rapid',
+    speedLabel: 'RAPID 10+0',
+    playerColor: 'white',
+    opponentName: 'SicilianMaster',
+    opponentRating: 2148,
+    result: 'W',
+    statusRu: 'Флаг (время)',
+    eco: 'C65',
+    openingName: 'Испанская партия: Берлинская защита',
+    movesUci: ['e2e4', 'e7e5', 'g1f3', 'b8c6', 'f1b5', 'g8f6', 'd2d3', 'f8c5', 'c2c3', 'e8g8'],
+    movesSan: ['e4', 'e5', 'Кf3', 'Кc6', 'Сb5', 'Кf6', 'd3', 'Сc5', 'c3', 'O-O'],
+    clocksCentis: [60000, 60000, 59400, 59100, 58800, 58200, 57500, 56900, 56100, 55200],
+    accuracyPct: 94.1,
+  },
+  {
+    id: 'lic-9978d',
+    createdAtStr: 'Сегодня, 13:05',
+    perf: 'blitz',
+    speedLabel: 'BLITZ 3+2',
+    playerColor: 'black',
+    opponentName: 'TacticWolf',
+    opponentRating: 2110,
+    result: 'L',
+    statusRu: 'Сдача',
+    eco: 'E60',
+    openingName: 'Староиндийская защита: Классическая система',
+    movesUci: ['d2d4', 'g8f6', 'c2c4', 'g7g6', 'b1c3', 'f8g7', 'e2e4', 'd7d6', 'g1f3', 'e8g8'],
+    movesSan: ['d4', 'Кf6', 'c4', 'g6', 'Кc3', 'Сg7', 'e4', 'd6', 'Кf3', 'O-O'],
+    clocksCentis: [18000, 18000, 17900, 17800, 17600, 17500, 17200, 16800, 16400, 15100],
+    accuracyPct: 78.5,
+  },
+];
 
 export const STREAK_BY_PERF: Record<PerfControl, StreakFormDto> = {
   blitz: {
