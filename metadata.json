@@ -1,0 +1,6 @@
+{
+  "name": "Lichess Mobile Pro — Advanced Analytics & OLED Redesign",
+  "description": "Модернизированный интерфейс Lichess Mobile (True Dark OLED), продвинутая шахматная аналитика, трекер дебютов, тепловая карта времени, пазл-тренажер и исходный код Flutter/Dart.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" fill="none">
+  <rect width="512" height="512" rx="104" fill="#121212"/>
+  <rect x="24" y="24" width="464" height="464" rx="80" stroke="#2A2A2E" stroke-width="8"/>
+  <!-- Chess Knight Icon in Amber Gold #D97706 -->
+  <path d="M 270,120 C 375,130 435,200 430,410 L 200,410 C 200,320 300,345 280,200" fill="#D97706" stroke="#121212" stroke-width="12" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M 290,200 C 293.8,229.1 234.5,273.7 210,290 C 180,310 181.8,333.4 160,330 C 149.5,320.6 174.1,299.6 160,300 C 150,300 161.9,312.3 150,320 C 140,320 109.9,330 110,280 C 110,260 170,160 170,160 C 170,160 188.9,141 190,125 C 182.7,115 185,105 185,95 C 195,85 215,120 215,120 L 235,120 C 235,120 242.8,100.1 260,90 C 270,90 270,120 270,120" fill="#D97706" stroke="#121212" stroke-width="12" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="215" cy="185" r="14" fill="#121212"/>
+</svg>
