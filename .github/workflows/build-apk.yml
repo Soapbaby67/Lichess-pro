@@ -1,0 +1,73 @@
+name: Build Android APK
+
+on:
+  push:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Setup Java JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '21'
+
+      - name: Prepare package.json & Build Web App
+        run: |
+          node -e '
+            const fs = require("fs");
+            const pkg = JSON.parse(fs.readFileSync("package.json", "utf8"));
+            pkg.dependencies = {
+              "lucide-react": "^0.475.0",
+              "motion": "^12.4.7",
+              "react": "^19.0.0",
+              "react-dom": "^19.0.0"
+            };
+            pkg.devDependencies = {
+              "@tailwindcss/vite": "^4.0.6",
+              "@types/node": "^22.10.0",
+              "@types/react": "^19.0.8",
+              "@types/react-dom": "^19.0.3",
+              "@vitejs/plugin-react": "^4.3.4",
+              "tailwindcss": "^4.0.6",
+              "typescript": "^5.7.3",
+              "vite": "^6.1.0",
+              "vite-plugin-pwa": "^0.21.1"
+            };
+            fs.writeFileSync("package.json", JSON.stringify(pkg, null, 2));
+          '
+          rm -f package-lock.json
+          npm install --legacy-peer-deps
+          npx vite build
+
+      - name: Package Android App with Capacitor
+        run: |
+          npm install @capacitor/core@7 @capacitor/cli@7 @capacitor/android@7 --legacy-peer-deps
+          rm -rf android capacitor.config.json capacitor.config.ts
+          npx cap init "Lichess Mobile Pro" "org.lichess.mobilepro" --web-dir dist
+          npx cap add android
+          npx cap sync android
+
+      - name: Build Debug APK with Gradle
+        run: |
+          cd android
+          chmod +x gradlew
+          ./gradlew assembleDebug --no-daemon
+
+      - name: Upload Ready-to-Install APK Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Lichess-Mobile-Pro-APK
+          path: android/app/build/outputs/apk/debug/app-debug.apk
